@@ -36,10 +36,14 @@ export async function fetchDailyPrices(ticker: string, apiKey: string): Promise<
 
 export async function validateApiKey(apiKey: string): Promise<boolean> {
   try {
-    const url = `${BASE_URL}?function=TIME_SERIES_DAILY_ADJUSTED&symbol=IBM&apikey=${encodeURIComponent(apiKey)}&outputsize=compact`;
+    const url = `${BASE_URL}?function=TIME_SERIES_DAILY&symbol=IBM&apikey=${encodeURIComponent(apiKey)}&outputsize=compact`;
     const res = await fetch(url);
     const json = await res.json();
-    return !!json['Time Series (Daily)'];
+    // Invalid only if explicit error message about the key itself
+    if (json['Error Message'] && json['Error Message'].toLowerCase().includes('invalid api key')) {
+      return false;
+    }
+    return true; // Note, Information, or actual data = key is valid
   } catch {
     return false;
   }
