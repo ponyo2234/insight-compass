@@ -13,9 +13,9 @@ export default function DCFPage() {
   const chartRef = useRef<HTMLDivElement>(null);
   const [dcf, setDcf] = useState(SAMPLE_DCF);
 
-  const wacc = useMemo(() => calculateWACC(dcf.costOfEquity, dcf.costOfDebt, dcf.taxRate, dcf.debtToEquity), [dcf]);
-  const result = useMemo(() => calculateDCF(dcf.fcfProjections, dcf.terminalGrowthRate, dcf.wacc, dcf.netDebt, dcf.sharesOutstanding), [dcf]);
-  const sensitivity = useMemo(() => dcfSensitivity(dcf.fcfProjections, dcf.terminalGrowthRate, dcf.wacc, dcf.netDebt, dcf.sharesOutstanding), [dcf]);
+  const wacc = useMemo(() => calculateWACC(dcf.costOfEquity, dcf.costOfDebt, dcf.taxRate, dcf.debtToEquity), [dcf.costOfEquity, dcf.costOfDebt, dcf.taxRate, dcf.debtToEquity]);
+  const result = useMemo(() => calculateDCF(dcf.fcfProjections, dcf.terminalGrowthRate, dcf.wacc, dcf.netDebt, dcf.sharesOutstanding), [dcf.fcfProjections, dcf.terminalGrowthRate, dcf.wacc, dcf.netDebt, dcf.sharesOutstanding]);
+  const sensitivity = useMemo(() => dcfSensitivity(dcf.fcfProjections, dcf.terminalGrowthRate, dcf.wacc, dcf.netDebt, dcf.sharesOutstanding), [dcf.fcfProjections, dcf.terminalGrowthRate, dcf.wacc, dcf.netDebt, dcf.sharesOutstanding]);
 
   const premiumDiscount = ((dcf.currentPrice - result.intrinsicValue) / result.intrinsicValue * 100);
 
@@ -24,11 +24,13 @@ export default function DCFPage() {
     { name: 'Terminal', value: +result.pvTerminal.toFixed(1), type: 'terminal' },
   ];
 
-  const updateField = (field: string, value: any) => setDcf(prev => ({ ...prev, [field]: value }));
+  const updateField = (field: string, value: number | string) => setDcf(prev => ({ ...prev, [field]: value }));
   const updateFCF = (idx: number, val: number) => {
-    const newFCFs = [...dcf.fcfProjections];
-    newFCFs[idx] = val;
-    setDcf(prev => ({ ...prev, fcfProjections: newFCFs }));
+    setDcf(prev => {
+      const newFCFs = [...prev.fcfProjections];
+      newFCFs[idx] = val;
+      return { ...prev, fcfProjections: newFCFs };
+    });
   };
 
   return (
@@ -41,7 +43,15 @@ export default function DCFPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Inputs */}
         <div className="bg-card border border-border rounded-lg p-5 space-y-4">
-          <h2 className="text-sm font-medium text-foreground">Company: {dcf.companyName}</h2>
+          <div>
+            <Label className="text-xs text-muted-foreground">Company Name</Label>
+            <Input
+              value={dcf.companyName}
+              onChange={e => updateField('companyName', e.target.value)}
+              className="h-8 font-medium"
+              placeholder="Enter company name"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-muted-foreground">Current Price ($)</Label>
@@ -67,6 +77,18 @@ export default function DCFPage() {
               <Label className="text-xs text-muted-foreground">Cost of Equity (%)</Label>
               <Input type="number" value={dcf.costOfEquity} onChange={e => updateField('costOfEquity', +e.target.value)} className="h-8 font-mono" step="0.1" />
             </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Cost of Debt (%)</Label>
+              <Input type="number" value={dcf.costOfDebt} onChange={e => updateField('costOfDebt', +e.target.value)} className="h-8 font-mono" step="0.1" />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Tax Rate (%)</Label>
+              <Input type="number" value={dcf.taxRate} onChange={e => updateField('taxRate', +e.target.value)} className="h-8 font-mono" step="1" />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">D/E Ratio</Label>
+              <Input type="number" value={dcf.debtToEquity} onChange={e => updateField('debtToEquity', +e.target.value)} className="h-8 font-mono" step="0.1" />
+            </div>
           </div>
 
           <div>
@@ -89,7 +111,7 @@ export default function DCFPage() {
         {/* Results */}
         <div className="lg:col-span-2 space-y-4">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <MetricCard label="Intrinsic Value" value={`$${result.intrinsicValue.toFixed(2)}`} variant="positive" />
+            <MetricCard label="Intrinsic Value" value={`$${result.intrinsicValue.toFixed(2)}`} variant={result.intrinsicValue > 0 ? 'positive' : 'negative'} />
             <MetricCard label="Enterprise Value" value={`$${(result.enterpriseValue / 1000).toFixed(1)}B`} />
             <MetricCard label="Equity Value" value={`$${(result.equityValue / 1000).toFixed(1)}B`} />
             <MetricCard
@@ -143,7 +165,7 @@ export default function DCFPage() {
                 <td className="p-2 text-muted-foreground font-medium">{row.wacc}%</td>
                 {row.values.map(cell => {
                   const diff = ((dcf.currentPrice - cell.value) / cell.value) * 100;
-                  const bg = diff > 20 ? 'bg-destructive/20' : diff > 0 ? 'bg-destructive/10' : diff > -20 ? 'bg-primary/10' : 'bg-primary/20';
+                  const bg = cell.value <= 0 ? 'bg-destructive/20' : diff > 20 ? 'bg-destructive/20' : diff > 0 ? 'bg-destructive/10' : diff > -20 ? 'bg-primary/10' : 'bg-primary/20';
                   return (
                     <td key={cell.tgr} className={`p-2 text-center ${bg} text-foreground`}>
                       ${cell.value.toFixed(0)}

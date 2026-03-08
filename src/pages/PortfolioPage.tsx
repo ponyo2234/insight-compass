@@ -1,19 +1,22 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { SAMPLE_PORTFOLIO, generateSamplePortfolioReturns } from '@/lib/sampleData';
 import {
   historicalVaR, parametricVaR, scaledVaR, sharpeRatio, maxDrawdown, stdDev, mean
 } from '@/lib/calculations';
+import { fetchDailyPrices, getApiKey } from '@/lib/alphaVantage';
 import { MetricCard } from '@/components/MetricCard';
 import { ChartExportButton } from '@/components/ChartExportButton';
 import { CsvUploader } from '@/components/CsvUploader';
+import { SampleCsvDownload } from '@/components/SampleCsvDownload';
+import { DemoDataNotice } from '@/components/DemoDataNotice';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Trash2, Plus, AlertTriangle, Shield, TrendingDown } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Trash2, Plus, AlertTriangle, Shield, TrendingDown, Loader2, Download } from 'lucide-react';
 import { PortfolioAsset } from '@/store/useAppStore';
+import { toast } from 'sonner';
 
 const PIE_COLORS = ['hsl(142,70%,45%)', 'hsl(210,80%,55%)', 'hsl(38,92%,50%)', 'hsl(280,60%,55%)', 'hsl(0,72%,50%)'];
 
@@ -23,11 +26,20 @@ export default function PortfolioPage() {
   const [newTicker, setNewTicker] = useState('');
   const [newWeight, setNewWeight] = useState('');
   const [newAssetClass, setNewAssetClass] = useState('Equity');
+  const [loading, setLoading] = useState(false);
+  const [liveReturns, setLiveReturns] = useState<{ date: string; returns: Record<string, number>; portfolioReturn: number }[] | null>(null);
+  const [csvReturns, setCsvReturns] = useState<{ date: string; returns: Record<string, number>; portfolioReturn: number }[] | null>(null);
 
-  const assets = settings.demoMode ? SAMPLE_PORTFOLIO : portfolioAssets;
+  const assets = settings.demoMode && portfolioAssets.length === 0 ? SAMPLE_PORTFOLIO : portfolioAssets.length > 0 ? portfolioAssets : SAMPLE_PORTFOLIO;
+  const useDemo = settings.demoMode && !liveReturns && !csvReturns && portfolioAssets.length === 0;
 
   const sampleData = useMemo(() => generateSamplePortfolioReturns(), []);
-  const portfolioReturns = useMemo(() => sampleData.map(d => d.portfolioReturn), [sampleData]);
+
+  const portfolioReturns = useMemo(() => {
+    if (liveReturns) return liveReturns.map(d => d.portfolioReturn);
+    if (csvReturns) return csvReturns.map(d => d.portfolioReturn);
+    return sampleData.map(d => d.portfolioReturn);
+  }, [liveReturns, csvReturns, sampleData]);
 
   const var95hist = useMemo(() => historicalVaR(portfolioReturns, 95), [portfolioReturns]);
   const var99hist = useMemo(() => historicalVaR(portfolioReturns, 99), [portfolioReturns]);
@@ -37,7 +49,6 @@ export default function PortfolioPage() {
   const sr = useMemo(() => sharpeRatio(portfolioReturns, settings.riskFreeRate), [portfolioReturns, settings.riskFreeRate]);
   const mdd = useMemo(() => maxDrawdown(portfolioReturns), [portfolioReturns]);
 
-  // Histogram data
   const histogramData = useMemo(() => {
     const bins = 50;
     const min = Math.min(...portfolioReturns);
@@ -68,6 +79,92 @@ export default function PortfolioPage() {
     setPortfolioAssets(portfolioAssets.filter((_, i) => i !== idx));
   };
 
+  const fetchPortfolioData = useCallback(async () => {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      toast.error('Add your Alpha Vantage API key in Settings first');
+      return;
+    }
+    if (assets.length === 0) return;
+
+    setLoading(true);
+    try {
+      const weights = assets.map(a => a.weight / 100);
+      const allPrices: Record<string, { date: string; close: number }[]> = {};
+
+      for (const asset of assets) {
+        const data = await fetchDailyPrices(asset.ticker, apiKey);
+        allPrices[asset.ticker] = data.slice(-504);
+      }
+
+      // Find common dates
+      const dateSets = Object.values(allPrices).map(prices => new Set(prices.map(p => p.date)));
+      const commonDates = [...dateSets[0]].filter(d => dateSets.every(s => s.has(d))).sort();
+
+      const priceByDate: Record<string, Record<string, number>> = {};
+      for (const [ticker, prices] of Object.entries(allPrices)) {
+        for (const p of prices) {
+          if (!priceByDate[p.date]) priceByDate[p.date] = {};
+          priceByDate[p.date][ticker] = p.close;
+        }
+      }
+
+      const result: { date: string; returns: Record<string, number>; portfolioReturn: number }[] = [];
+      for (let i = 1; i < commonDates.length; i++) {
+        const today = commonDates[i];
+        const yesterday = commonDates[i - 1];
+        const dayReturns: Record<string, number> = {};
+        let portRet = 0;
+        assets.forEach((a, idx) => {
+          const ret = (priceByDate[today][a.ticker] - priceByDate[yesterday][a.ticker]) / priceByDate[yesterday][a.ticker];
+          dayReturns[a.ticker] = ret;
+          portRet += weights[idx] * ret;
+        });
+        result.push({ date: today, returns: dayReturns, portfolioReturn: portRet });
+      }
+
+      setLiveReturns(result);
+      setCsvReturns(null);
+      toast.success(`Fetched real data for ${assets.length} assets (${result.length} days)`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to fetch portfolio data');
+    } finally {
+      setLoading(false);
+    }
+  }, [assets]);
+
+  const handleCsvUpload = useCallback((data: any[]) => {
+    if (data.length === 0) return;
+    const headers = Object.keys(data[0]).filter(h => h.toLowerCase() !== 'date');
+    const tickers = headers;
+
+    // Auto-create portfolio assets if none exist
+    if (portfolioAssets.length === 0) {
+      const equalWeight = +(100 / tickers.length).toFixed(1);
+      setPortfolioAssets(tickers.map(t => ({ ticker: t, weight: equalWeight, assetClass: 'Equity' })));
+    }
+
+    const weights = tickers.map((_, i) => {
+      const asset = portfolioAssets.find(a => a.ticker === tickers[i]);
+      return asset ? asset.weight / 100 : 1 / tickers.length;
+    });
+
+    const result = data.map((row: any) => {
+      const dayReturns: Record<string, number> = {};
+      let portRet = 0;
+      tickers.forEach((t, idx) => {
+        const val = parseFloat(row[t] || 0);
+        dayReturns[t] = val;
+        portRet += weights[idx] * val;
+      });
+      return { date: row.date || row.Date, returns: dayReturns, portfolioReturn: portRet };
+    });
+
+    setCsvReturns(result);
+    setLiveReturns(null);
+    toast.success(`Loaded ${result.length} days for ${tickers.length} assets from CSV`);
+  }, [portfolioAssets, setPortfolioAssets]);
+
   const totalWeight = assets.reduce((s, a) => s + a.weight, 0);
 
   return (
@@ -88,7 +185,7 @@ export default function PortfolioPage() {
                   <th className="text-left py-2 text-muted-foreground font-medium">Ticker</th>
                   <th className="text-left py-2 text-muted-foreground font-medium">Weight (%)</th>
                   <th className="text-left py-2 text-muted-foreground font-medium">Asset Class</th>
-                  {!settings.demoMode && <th className="py-2 w-10"></th>}
+                  <th className="py-2 w-10"></th>
                 </tr>
               </thead>
               <tbody>
@@ -99,13 +196,11 @@ export default function PortfolioPage() {
                     <td className="py-2">
                       <span className="px-2 py-0.5 rounded text-xs bg-secondary text-secondary-foreground">{a.assetClass}</span>
                     </td>
-                    {!settings.demoMode && (
-                      <td className="py-2">
-                        <button onClick={() => removeAsset(i)} className="text-muted-foreground hover:text-destructive">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    )}
+                    <td className="py-2">
+                      <button onClick={() => removeAsset(i)} className="text-muted-foreground hover:text-destructive">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -116,46 +211,44 @@ export default function PortfolioPage() {
             <span className={totalWeight === 100 ? 'text-positive' : 'text-warning'}>{totalWeight}%</span>
           </div>
 
-          {!settings.demoMode && (
-            <div className="mt-4 flex gap-2 items-end">
-              <div>
-                <label className="text-xs text-muted-foreground">Ticker</label>
-                <Input value={newTicker} onChange={e => setNewTicker(e.target.value)} placeholder="AAPL" className="h-8 w-24 font-mono" />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground">Weight %</label>
-                <Input value={newWeight} onChange={e => setNewWeight(e.target.value)} type="number" placeholder="20" className="h-8 w-20 font-mono" />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground">Class</label>
-                <Select value={newAssetClass} onValueChange={setNewAssetClass}>
-                  <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Equity">Equity</SelectItem>
-                    <SelectItem value="Bond">Bond</SelectItem>
-                    <SelectItem value="Commodity">Commodity</SelectItem>
-                    <SelectItem value="FX">FX</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button size="sm" onClick={addAsset} className="h-8"><Plus className="h-4 w-4 mr-1" />Add</Button>
+          <div className="mt-4 flex gap-2 items-end flex-wrap">
+            <div>
+              <label className="text-xs text-muted-foreground">Ticker</label>
+              <Input value={newTicker} onChange={e => setNewTicker(e.target.value)} placeholder="AAPL" className="h-8 w-24 font-mono" />
             </div>
-          )}
+            <div>
+              <label className="text-xs text-muted-foreground">Weight %</label>
+              <Input value={newWeight} onChange={e => setNewWeight(e.target.value)} type="number" placeholder="20" className="h-8 w-20 font-mono" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Class</label>
+              <Select value={newAssetClass} onValueChange={setNewAssetClass}>
+                <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Equity">Equity</SelectItem>
+                  <SelectItem value="Bond">Bond</SelectItem>
+                  <SelectItem value="Commodity">Commodity</SelectItem>
+                  <SelectItem value="FX">FX</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button size="sm" onClick={addAsset} className="h-8"><Plus className="h-4 w-4 mr-1" />Add</Button>
+          </div>
 
-          {!settings.demoMode && (
-            <div className="mt-4">
-              <CsvUploader onData={(data) => {
-                const parsed: PortfolioAsset[] = data.map((row: any) => ({
-                  ticker: row.ticker || row.Ticker || '',
-                  weight: parseFloat(row.weight || row.Weight || 0),
-                  assetClass: row.assetClass || row['Asset Class'] || 'Equity',
-                })).filter(a => a.ticker);
-                setPortfolioAssets(parsed);
-              }}>
-                <p className="text-xs text-muted-foreground mt-1">CSV format: ticker, weight, assetClass</p>
-              </CsvUploader>
-            </div>
-          )}
+          <div className="mt-4 flex gap-2 items-center flex-wrap">
+            <Button size="sm" variant="outline" onClick={fetchPortfolioData} disabled={loading} className="h-8 gap-1">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Fetch Real Data for Portfolio
+            </Button>
+            <span className="text-xs text-muted-foreground">or</span>
+            <SampleCsvDownload type="portfolio" />
+          </div>
+
+          <div className="mt-4">
+            <CsvUploader onData={handleCsvUpload}>
+              <p className="text-xs text-muted-foreground mt-1">CSV format: date, TICKER1, TICKER2, ... (daily returns)</p>
+            </CsvUploader>
+          </div>
         </div>
 
         {/* Allocation Pie */}
@@ -183,6 +276,8 @@ export default function PortfolioPage() {
           </div>
         </div>
       </div>
+
+      {useDemo && <DemoDataNotice />}
 
       {/* VaR Metrics */}
       <div>
