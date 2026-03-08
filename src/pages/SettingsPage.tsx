@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getApiKey, setApiKey, getDefaultTicker, setDefaultTicker, validateApiKey } from '@/lib/alphaVantage';
 import { Input } from '@/components/ui/input';
