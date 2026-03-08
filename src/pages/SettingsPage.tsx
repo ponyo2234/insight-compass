@@ -18,7 +18,9 @@ export default function SettingsPage() {
     if (getApiKey()) setApiStatus('valid');
   }, []);
 
-  const handleSaveApiKey = async (key: string) => {
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout>>();
+
+  const handleSaveApiKey = (key: string) => {
     setApiKeyState(key);
     setApiKey(key);
     if (!key) {
@@ -26,8 +28,11 @@ export default function SettingsPage() {
       return;
     }
     setApiStatus('checking');
-    const valid = await validateApiKey(key);
-    setApiStatus(valid ? 'valid' : 'invalid');
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      const valid = await validateApiKey(key);
+      setApiStatus(valid ? 'valid' : 'invalid');
+    }, 800);
   };
 
   const handleSaveDefaultTicker = (ticker: string) => {
