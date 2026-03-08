@@ -1,20 +1,69 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { generateOHLCV } from '@/lib/sampleData';
 import { computeReturns, rollingVolatility, stdDev, mean } from '@/lib/calculations';
+import { fetchDailyPrices, getApiKey, getDefaultTicker } from '@/lib/alphaVantage';
 import { MetricCard } from '@/components/MetricCard';
 import { ChartExportButton } from '@/components/ChartExportButton';
 import { CsvUploader } from '@/components/CsvUploader';
+import { SampleCsvDownload } from '@/components/SampleCsvDownload';
+import { TickerSearch } from '@/components/TickerSearch';
+import { DemoDataNotice } from '@/components/DemoDataNotice';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart, Scatter } from 'recharts';
 import { TrendingUp, AlertTriangle } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { toast } from 'sonner';
 
 export default function MarketRiskPage() {
   const { settings, priceData, setPriceData } = useAppStore();
   const chartRef = useRef<HTMLDivElement>(null);
   const volChartRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(false);
+  const [activeTicker, setActiveTicker] = useState<string | null>(null);
+  const [csvData, setCsvData] = useState<any[] | null>(null);
 
-  const ohlcv = useMemo(() => settings.demoMode ? generateOHLCV(300, 150, 42) : priceData as any[], [settings.demoMode, priceData]);
+  const useDemo = settings.demoMode && !csvData && priceData.length === 0;
+
+  const ohlcv = useMemo(() => {
+    if (csvData) return csvData;
+    if (priceData.length > 0) return priceData as any[];
+    return generateOHLCV(300, 150, 42);
+  }, [csvData, priceData]);
+
+  const handleFetchTicker = useCallback(async (ticker: string) => {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      toast.error('Add your Alpha Vantage API key in Settings first');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await fetchDailyPrices(ticker, apiKey);
+      // Take last 2 years
+      const recent = data.slice(-504);
+      setPriceData(recent);
+      setCsvData(null);
+      setActiveTicker(ticker);
+      toast.success(`Loaded ${recent.length} days of data for ${ticker}`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to fetch data');
+    } finally {
+      setLoading(false);
+    }
+  }, [setPriceData]);
+
+  const handleCsvUpload = useCallback((data: any[]) => {
+    const parsed = data.map((row: any) => ({
+      date: row.date || row.Date,
+      open: parseFloat(row.open || row.Open || 0),
+      high: parseFloat(row.high || row.High || 0),
+      low: parseFloat(row.low || row.Low || 0),
+      close: parseFloat(row.close || row.Close || 0),
+      volume: parseInt(row.volume || row.Volume || 0, 10),
+    })).filter(d => d.date && !isNaN(d.close));
+    setCsvData(parsed);
+    setActiveTicker('CSV');
+    toast.success(`Loaded ${parsed.length} rows from CSV`);
+  }, []);
 
   const closes = useMemo(() => ohlcv.map((d: any) => d.close), [ohlcv]);
   const returns = useMemo(() => computeReturns(closes), [closes]);
@@ -63,11 +112,31 @@ export default function MarketRiskPage() {
         <p className="text-sm text-muted-foreground mt-1">Analyze price volatility and identify high-risk periods</p>
       </div>
 
-      {!settings.demoMode && (
-        <CsvUploader onData={(data) => setPriceData(data)}>
-          <p className="text-xs text-muted-foreground mt-1">CSV format: date, open, high, low, close, volume</p>
-        </CsvUploader>
-      )}
+      {/* Data Input Section */}
+      <div className="bg-card border border-border rounded-lg p-5 space-y-4">
+        <h2 className="text-sm font-medium text-foreground">Data Source</h2>
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex-1">
+            <p className="text-xs text-muted-foreground mb-2">Fetch via API</p>
+            <TickerSearch onSearch={handleFetchTicker} loading={loading} defaultValue={getDefaultTicker()} />
+          </div>
+          <div className="text-xs text-muted-foreground flex items-center">or</div>
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-muted-foreground">Upload CSV</p>
+              <SampleCsvDownload type="price" />
+            </div>
+            <CsvUploader onData={handleCsvUpload}>
+              <p className="text-xs text-muted-foreground mt-1">Format: date, open, high, low, close, volume</p>
+            </CsvUploader>
+          </div>
+        </div>
+        {activeTicker && (
+          <p className="text-xs text-primary font-mono">Active: {activeTicker} ({ohlcv.length} data points)</p>
+        )}
+      </div>
+
+      {useDemo && <DemoDataNotice />}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard label="Current Price" value={`$${closes[closes.length - 1]?.toFixed(2) || '—'}`} icon={<TrendingUp className="h-4 w-4" />} />
