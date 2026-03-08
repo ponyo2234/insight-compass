@@ -133,12 +133,12 @@ export const SAMPLE_DCF = {
   companyName: 'TechCorp AG',
   currentPrice: 145,
   sharesOutstanding: 500, // millions
-  fcfProjections: [12, 14, 16.5, 19, 21.5, 24, 26, 28, 30, 32],
+  fcfProjections: [800, 880, 960, 1050, 1150, 1250, 1360, 1480, 1610, 1750],
   terminalGrowthRate: 2.5,
   wacc: 9.5,
   costOfEquity: 11,
   costOfDebt: 4.5,
   taxRate: 21,
   debtToEquity: 0.4,
-  netDebt: 2000, // millions
+  netDebt: 5000, // millions
 };
