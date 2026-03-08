@@ -10,7 +10,7 @@ export interface AlphaVantageDaily {
 }
 
 export async function fetchDailyPrices(ticker: string, apiKey: string): Promise<AlphaVantageDaily[]> {
-  const url = `${BASE_URL}?function=TIME_SERIES_DAILY_ADJUSTED&symbol=${encodeURIComponent(ticker)}&outputsize=full&apikey=${encodeURIComponent(apiKey)}`;
+  const url = `${BASE_URL}?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(ticker)}&outputsize=full&apikey=${encodeURIComponent(apiKey)}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`API request failed: ${res.status}`);
   const json = await res.json();
